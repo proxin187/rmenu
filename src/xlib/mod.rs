@@ -83,12 +83,31 @@ impl Display {
 
                 let monitors = x11::xinerama::XineramaQueryScreens(dpy, &mut 2);
 
+                let mut root_x = attr.x;
+
+                // if we are root window, get mouse position instead of window position
+                if focused == xlib::XDefaultRootWindow(dpy) {
+                    let mut root_return = xlib::XDefaultRootWindow(dpy);
+
+                    xlib::XQueryPointer(
+                        dpy,
+                        root_return,
+                        &mut root_return,
+                        &mut root_return,
+                        &mut root_x,
+                        &mut 0,
+                        &mut 0,
+                        &mut 0,
+                        &mut 0,
+                    );
+                }
+
                 for i in 0..2 {
                     let monitor = *monitors.offset(i);
 
                     let range = monitor.x_org as i32..monitor.width as i32 + monitor.x_org as i32;
 
-                    if range.contains(&attr.x) {
+                    if range.contains(&root_x) {
                         current_monitor = monitor;
                     }
                 }
