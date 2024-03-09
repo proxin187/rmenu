@@ -1,4 +1,8 @@
+use crate::config::Config;
+
+use x11::xrender;
 use x11::xlib;
+use x11::xft;
 
 use std::ffi::CStr;
 use std::ptr;
@@ -38,12 +42,19 @@ impl Color {
     pub fn encode(&self) -> u64 {
         self.b + (self.g << 8) + (self.r << 16)
     }
+
+    pub fn hex(&self) -> String {
+        format!("#{:x}{:x}{:x}", self.r, self.g, self.b)
+    }
 }
 
 pub struct Display {
     dpy: *mut xlib::_XDisplay,
     gc: *mut xlib::_XGC,
+    draw: *mut x11::xft::XftDraw,
+
     window: u64,
+    screen: i32,
 
     pub width: i32,
 }
@@ -59,17 +70,14 @@ impl Drop for Display {
 }
 
 impl Display {
-    pub fn open() -> Result<Display, Box<dyn std::error::Error>> {
+    pub fn open(config: &Config) -> Result<Display, Box<dyn std::error::Error>> {
         let dpy = unsafe { xlib::XOpenDisplay(ptr::null()) };
 
         if dpy.is_null() {
             Err("failed to open display".into())
         } else {
             unsafe {
-                let mut attr: xlib::XWindowAttributes = mem::zeroed();
                 let mut values: xlib::XGCValues = mem::zeroed();
-                let mut focused: u64 = 0;
-                let mut revert_to: i32 = 0;
                 let mut current_monitor = x11::xinerama::XineramaScreenInfo {
                     screen_number: 0,
                     x_org: 0,
@@ -78,41 +86,39 @@ impl Display {
                     height: 0,
                 };
 
-                xlib::XGetInputFocus(dpy, &mut focused, &mut revert_to);
-                xlib::XGetWindowAttributes(dpy, focused, &mut attr);
+                let mut root_return = xlib::XDefaultRootWindow(dpy);
+                let mut root_x = 0;
 
-                let monitors = x11::xinerama::XineramaQueryScreens(dpy, &mut 2);
+                xlib::XQueryPointer(
+                    dpy,
+                    root_return,
+                    &mut root_return,
+                    &mut root_return,
+                    &mut root_x,
+                    &mut 0,
+                    &mut 0,
+                    &mut 0,
+                    &mut 0,
+                );
 
-                let mut root_x = attr.x;
+                // get current monitor
+                {
+                    let mut count = 0;
 
-                // if we are root window, get mouse position instead of window position
-                if focused == xlib::XDefaultRootWindow(dpy) {
-                    let mut root_return = xlib::XDefaultRootWindow(dpy);
+                    let monitors = x11::xinerama::XineramaQueryScreens(dpy, &mut count);
 
-                    xlib::XQueryPointer(
-                        dpy,
-                        root_return,
-                        &mut root_return,
-                        &mut root_return,
-                        &mut root_x,
-                        &mut 0,
-                        &mut 0,
-                        &mut 0,
-                        &mut 0,
-                    );
-                }
+                    for i in 0..count {
+                        let monitor = *monitors.offset(i as isize);
 
-                for i in 0..2 {
-                    let monitor = *monitors.offset(i);
+                        let range = monitor.x_org as i32..monitor.width as i32 + monitor.x_org as i32;
 
-                    let range = monitor.x_org as i32..monitor.width as i32 + monitor.x_org as i32;
-
-                    if range.contains(&root_x) {
-                        current_monitor = monitor;
+                        if range.contains(&root_x) {
+                            current_monitor = monitor;
+                        }
                     }
                 }
 
-                let black = Color::new(40, 40, 40).encode();
+                let bg = config.background.encode();
                 let window = xlib::XCreateSimpleWindow(
                     dpy,
                     xlib::XDefaultRootWindow(dpy),
@@ -121,11 +127,13 @@ impl Display {
                     current_monitor.width as u32,
                     22,
                     0,
-                    black,
-                    black
+                    bg,
+                    bg
                 );
+                let screen = xlib::XDefaultScreen(dpy);
 
                 let gc = xlib::XCreateGC(dpy, window, 0, &mut values);
+                let draw = xft::XftDrawCreate(dpy, window, xlib::XDefaultVisual(dpy, screen), xlib::XDefaultColormap(dpy, screen));
 
                 xlib::XSync(dpy, xlib::False);
 
@@ -133,6 +141,8 @@ impl Display {
                     dpy,
                     gc,
                     window,
+                    screen,
+                    draw,
 
                     width: current_monitor.width as i32,
                 })
@@ -205,15 +215,61 @@ impl Display {
         }
     }
 
-    pub fn load_font(&mut self, font: &str) -> Result<*mut xlib::XFontStruct, Box<dyn std::error::Error>> {
+    pub fn xft_draw_string(
+        &mut self,
+        text: &str,
+        x: i32,
+        y: i32,
+        font: *mut xft::XftFont,
+        color: *const xft::XftColor,
+    ) {
         unsafe {
-            let font = xlib::XLoadQueryFont(self.dpy, self.null_terminate(font).as_ptr() as *const i8);
+            xft::XftDrawStringUtf8(self.draw, color, font, x, y, self.null_terminate(text).as_ptr(), text.len() as i32);
+        }
+    }
+
+    pub fn xft_measure_string(&self, text: &str, font: *mut xft::XftFont) -> xrender::_XGlyphInfo {
+        unsafe {
+            let mut extents: xrender::_XGlyphInfo = mem::zeroed();
+
+            xft::XftTextExtentsUtf8(self.dpy, font, self.null_terminate(text).as_ptr(), text.len() as i32, &mut extents);
+
+            extents
+        }
+    }
+
+    pub fn xft_color_alloc_name(&mut self, rgb: Color) -> Result<xft::XftColor, Box<dyn std::error::Error>> {
+        let hex = rgb.hex();
+
+        unsafe {
+            let mut color: xft::XftColor = mem::zeroed();
+
+            let result = xft::XftColorAllocName(
+                self.dpy,
+                xlib::XDefaultVisual(self.dpy, self.screen),
+                xlib::XDefaultColormap(self.dpy, self.screen),
+                self.null_terminate(&hex).as_ptr() as *const i8,
+                &mut color,
+            );
+
+            if result == 0 {
+                Err("XftColorAllocName failed".into())
+            } else {
+                Ok(color)
+            }
+        }
+    }
+
+    pub fn load_font(&mut self, font: &str) -> Result<*mut xft::XftFont, Box<dyn std::error::Error>> {
+        unsafe {
+            let font = xft::XftFontOpenName(self.dpy, self.screen, self.null_terminate(font).as_ptr() as *const i8);
 
             if font.is_null() {
-                Err("BadAlloc".into())
+                Err("XftFontOpenName failed".into())
             } else {
                 Ok(font)
             }
+
         }
     }
 
@@ -221,20 +277,6 @@ impl Display {
         unsafe {
             xlib::XSetForeground(self.dpy, self.gc, color.encode());
             xlib::XFillRectangle(self.dpy, self.window, self.gc, x, y, width, height);
-        }
-    }
-
-    pub fn text_width(&self, text: &str, font: *mut xlib::XFontStruct) -> i32 {
-        unsafe {
-            xlib::XTextWidth(font, self.null_terminate(text).as_ptr() as *const i8, text.len() as i32)
-        }
-    }
-
-    pub fn draw_text(&mut self, text: &str, x: i32, y: i32, font: *mut xlib::XFontStruct, color: Color) {
-        unsafe {
-            xlib::XSetFont(self.dpy, self.gc, (*font).fid);
-            xlib::XSetForeground(self.dpy, self.gc, color.encode());
-            xlib::XDrawString(self.dpy, self.window, self.gc, x, y, self.null_terminate(text).as_ptr() as *const i8, text.len() as i32);
         }
     }
 }

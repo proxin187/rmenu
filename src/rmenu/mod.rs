@@ -11,10 +11,18 @@ struct Search {
     select: usize,
 }
 
+struct Xft {
+    font: *mut x11::xft::XftFont,
+    foreground: x11::xft::XftColor,
+    background: x11::xft::XftColor,
+}
+
 pub struct Menu {
     display: xlib::Display,
     config: Config,
     search: Search,
+    xft: Xft,
+
     applications: HashMap<String, String>,
     matches: Vec<(String, String)>,
     should_close: bool,
@@ -23,13 +31,26 @@ pub struct Menu {
 
 impl Menu {
     pub fn new(config_path: &str) -> Result<Menu, Box<dyn std::error::Error>> {
+        let config = Config::load(config_path)?;
+        let mut display = xlib::Display::open(&config)?;
+
+        let font = display.load_font(&config.font)?;
+        let foreground = display.xft_color_alloc_name(config.foreground)?;
+        let background = display.xft_color_alloc_name(config.background)?;
+
         Ok(Menu {
-            display: xlib::Display::open()?,
-            config: Config::load(config_path)?,
+            display,
+            config,
             search: Search {
                 value: String::new(),
                 select: 0,
             },
+            xft: Xft {
+                font,
+                foreground,
+                background,
+            },
+
             applications: HashMap::new(),
             matches: vec![(String::new(), String::new()); 5],
             should_close: false,
@@ -66,42 +87,42 @@ impl Menu {
         self.matches = matches;
     }
 
-    fn draw(&mut self, font: *mut x11::xlib::XFontStruct) {
+    fn draw(&mut self) {
         self.display.clear_window();
 
-        self.display.draw_text(&self.search.value, 10, 15, font, self.config.foreground);
+        self.display.xft_draw_string(&self.search.value, 10, 15, self.xft.font, &self.xft.foreground);
 
-        self.display.draw_text(
-            "rmenu v1.0",
-            self.display.width - self.display.text_width("rmenu v1.0", font) - 15,
+        self.display.xft_draw_string(
+            "rmenu v1.1",
+            self.display.width - self.display.xft_measure_string("rmenu v1.1", self.xft.font).width as i32 - 10,
             15,
-            font,
-            self.config.foreground
+            self.xft.font,
+            &self.xft.foreground
         );
 
         if !self.search.value.is_empty() {
             self.display.draw_rec(
-                self.display.text_width(&self.search.value, font) + 10,
-                5,
-                5,
-                12,
+                self.display.xft_measure_string(&self.search.value, self.xft.font).width as i32 + 10,
+                0,
+                8,
+                20,
                 xlib::Color::new(255, 255, 255)
             );
         } else {
-            self.display.draw_rec(10, 5, 5, 12, xlib::Color::new(255, 255, 255));
+            self.display.draw_rec(10, 0, 8, 20, xlib::Color::new(255, 255, 255));
         }
 
         let mut offset = 150;
 
         for (index, (name, _)) in self.matches.iter().enumerate() {
             if !name.is_empty() && index < self.display.width as usize {
-                let width = self.display.text_width(&name, font);
+                let width = self.display.xft_measure_string(&name, self.xft.font).width as i32;
 
                 if index == self.search.select {
                     self.display.draw_rec(offset, 0, width as u32, 23, self.config.foreground);
-                    self.display.draw_text(&name, offset, 15, font, self.config.background);
+                    self.display.xft_draw_string(&name, offset, 15, self.xft.font, &self.xft.background);
                 } else {
-                    self.display.draw_text(&name, offset, 15, font, self.config.foreground);
+                    self.display.xft_draw_string(&name, offset, 15, self.xft.font, &self.xft.foreground);
                 }
 
                 offset += width + 10;
@@ -189,15 +210,13 @@ impl Menu {
 
         self.display.map_window();
 
-        let font = self.display.load_font("fixed")?;
-
         while !self.should_close {
             self.display.select_input();
 
             if let Some(event) = self.display.poll_event() {
                 self.handle_event(event)?;
                 self.search(10);
-                self.draw(font);
+                self.draw();
             }
         }
 
