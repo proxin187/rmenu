@@ -2,7 +2,7 @@
 
 RMenu is like dmenu but in rust
 
-[Demo](assets/preview.gif)
+![Demo](assets/preview.gif)
 
 # Installation
 Installation can be done with the following commands
