@@ -177,6 +177,12 @@ impl Display {
         Ok(())
     }
 
+    pub fn set_window_name(&mut self, name: &str) {
+        unsafe {
+            xlib::XStoreName(self.dpy, self.window, self.null_terminate(name).as_ptr() as *const i8);
+        }
+    }
+
     pub fn poll_event(&mut self) -> Option<xlib::XEvent> {
         unsafe {
             if xlib::XPending(self.dpy) > 0 {

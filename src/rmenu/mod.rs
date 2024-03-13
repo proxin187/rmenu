@@ -207,6 +207,7 @@ impl Menu {
         self.display.set_property("_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DOCK")?;
         self.display.set_property("_NET_WM_STATE", "_NET_WM_STATE_ABOVE")?;
         self.display.set_property("_NET_WM_STATE", "_NET_WM_STATE_MODAL")?;
+        self.display.set_window_name("rmenu");
 
         self.display.map_window();
 
