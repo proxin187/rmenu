@@ -44,7 +44,7 @@ impl Color {
     }
 
     pub fn hex(&self) -> String {
-        format!("#{:x}{:x}{:x}", self.r, self.g, self.b)
+        format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
     }
 }
 
