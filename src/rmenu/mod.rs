@@ -1,6 +1,9 @@
 use crate::config::Config;
 use crate::xlib;
 
+use fork::{fork, Fork};
+
+use std::os::unix::process::CommandExt;
 use std::collections::HashMap;
 use std::process::Command;
 use std::env;
@@ -93,7 +96,7 @@ impl Menu {
         self.display.xft_draw_string(&self.search.value, 10, 15, self.xft.font, &self.xft.foreground);
 
         self.display.xft_draw_string(
-            "rmenu v1.1",
+            "rmenu v1.2",
             self.display.width - self.display.xft_measure_string("rmenu v1.1", self.xft.font).width as i32 - 10,
             15,
             self.xft.font,
@@ -157,7 +160,15 @@ impl Menu {
                     x11::keysym::XK_Return => {
                         let path = self.applications.get(&self.matches[self.search.select].0).ok_or::<Box<dyn std::error::Error>>("no such program".into())?;
 
-                        Command::new(path).spawn()?;
+                        match fork() {
+                            Ok(Fork::Child) => {
+                                let error = Command::new(path).exec();
+
+                                println!("[+] execvp failed: {}", error);
+                            },
+                            Ok(Fork::Parent(_)) => println!("[+] forked successfully"),
+                            Err(_) => println!("[+] failed to fork"),
+                        }
 
                         self.should_close = true;
                     },
